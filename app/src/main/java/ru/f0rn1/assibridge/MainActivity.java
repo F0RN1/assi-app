@@ -49,6 +49,8 @@ public class MainActivity extends Activity {
     private static final String KEY_SERVER = "server";
     private static final String KEY_MAC = "wol_mac";
     private static final String KEY_BCAST = "wol_bcast";
+    private static final String KEY_UIVER = "ui_version";
+    private static final String APP_VERSION = "1.2";
     private static final int REQ_FILE = 1001;
     private static final int REQ_MIC = 1002;
 
@@ -87,6 +89,10 @@ public class MainActivity extends Activity {
             showSetup();
         } else {
             ensureWeb();
+            if (!APP_VERSION.equals(prefs().getString(KEY_UIVER, ""))) {
+                web.clearCache(true);          // после обновления приложения — свежий интерфейс
+                prefs().edit().putString(KEY_UIVER, APP_VERSION).apply();
+            }
             load(server);
         }
         startHeartbeat();
