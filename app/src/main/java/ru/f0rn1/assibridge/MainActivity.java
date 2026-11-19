@@ -11,6 +11,8 @@ import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.KeyEvent;
@@ -30,9 +32,15 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
+import java.net.HttpURLConnection;
 import java.net.InetAddress;
+import java.net.URL;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
 
@@ -49,6 +57,19 @@ public class MainActivity extends Activity {
     private View setupView;
     private View offlineView;
 
+    /* ---- сторож связи: раз в 30 с стучимся в /api/ping ---- */
+    private final Handler hbHandler = new Handler(Looper.getMainLooper());
+    private final ExecutorService hbExec = Executors.newSingleThreadExecutor();
+    private boolean hbStarted = false;
+    private int hbFails = 0;
+    private final Runnable hbTick = new Runnable() {
+        @Override
+        public void run() {
+            pingOnce();
+            hbHandler.postDelayed(this, 30000);
+        }
+    };
+
     @Override
     protected void onCreate(Bundle saved) {
         super.onCreate(saved);
@@ -59,11 +80,15 @@ public class MainActivity extends Activity {
         setContentView(root);
 
         askMic();
-        buildWebView();
 
         String server = prefs().getString(KEY_SERVER, "");
-        if (server == null || server.isEmpty()) showSetup();
-        else load(server);
+        if (server == null || server.isEmpty()) {
+            showSetup();
+        } else {
+            ensureWeb();
+            load(server);
+        }
+        startHeartbeat();
     }
 
     private SharedPreferences prefs() {
@@ -137,6 +162,7 @@ public class MainActivity extends Activity {
     }
 
     private void showOffline() {
+        if (setupView != null) return;   // на экране настройки сервера сторожа нет
         if (offlineView != null) {
             offlineView.setVisibility(View.VISIBLE);
             return;
@@ -255,7 +281,18 @@ public class MainActivity extends Activity {
 
             @Override
             public void onPageFinished(WebView view, String url) {
-                if (!"about:blank".equals(url)) hideOffline();
+                if ("about:blank".equals(url)) return;
+                hideOffline();
+                // 1033 от Cloudflare приходит с кодом 200 — ловим по тексту страницы
+                view.evaluateJavascript(
+                        "((document.body&&document.body.innerText)||'').slice(0,600)", value -> {
+                            if (value == null) return;
+                            String v = value.toLowerCase();
+                            if (v.contains("error 1033") || v.contains("cloudflare tunnel error")
+                                    || v.contains("origin is unreachable") || v.contains("1033")) {
+                                showOffline();
+                            }
+                        });
             }
 
             @Override
@@ -270,8 +307,73 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
     }
 
+    private void ensureWeb() {
+        if (web == null) buildWebView();
+    }
+
     private void load(String url) {
+        ensureWeb();
         if (web != null) web.loadUrl(url);
+    }
+
+    /* ---------- сторож связи: ловим и «страницу ошибки Cloudflare» ---------- */
+
+    private void startHeartbeat() {
+        if (hbStarted) return;
+        hbStarted = true;
+        hbHandler.postDelayed(hbTick, 5000);
+    }
+
+    private void pingOnce() {
+        final String server = prefs().getString(KEY_SERVER, "");
+        if (server == null || server.isEmpty()) return;
+        hbExec.execute(() -> {
+            boolean ok = false;
+            HttpURLConnection c = null;
+            try {
+                String base = server.endsWith("/") ? server.substring(0, server.length() - 1) : server;
+                if (!base.startsWith("http")) base = "https://" + base;
+                c = (HttpURLConnection) new URL(base + "/api/ping").openConnection();
+                c.setConnectTimeout(8000);
+                c.setReadTimeout(12000);
+                c.setRequestProperty("Accept", "*/*");
+                c.setRequestProperty("User-Agent", "AssiApp/1.0");
+                if (c.getResponseCode() == 200) {
+                    StringBuilder sb = new StringBuilder();
+                    try (BufferedReader br = new BufferedReader(new InputStreamReader(c.getInputStream(), "UTF-8"))) {
+                        String line;
+                        while ((line = br.readLine()) != null && sb.length() < 400) sb.append(line);
+                    }
+                    ok = sb.indexOf("\"ok\"") >= 0;   // страница ошибки CF тоже 200 — проверяем тело
+                }
+            } catch (Exception ignored) {
+            } finally {
+                if (c != null) c.disconnect();
+            }
+            final boolean res = ok;
+            runOnUiThread(() -> onPing(res));
+        });
+    }
+
+    private void onPing(boolean ok) {
+        if (ok) {
+            boolean was = offlineView != null && offlineView.getVisibility() == View.VISIBLE;
+            hbFails = 0;
+            hideOffline();
+            if (was) {
+                String s = prefs().getString(KEY_SERVER, "");
+                if (s != null && !s.isEmpty() && web != null) web.loadUrl(s);   // перезагружаем вместо страницы ошибки
+            }
+            return;
+        }
+        hbFails++;
+        if (hbFails >= 2) showOffline();   // два промаха подряд — показываем «Разбудить ноут»
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (web != null) pingOnce();
     }
 
     private void askMic() {
