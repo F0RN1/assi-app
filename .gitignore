@@ -1,4 +1,9 @@
 build/
+app/build/
 .gradle/
 local.properties
 *.iml
+*.keystore
+*.jks
+keystore.pass
+.DS_Store
