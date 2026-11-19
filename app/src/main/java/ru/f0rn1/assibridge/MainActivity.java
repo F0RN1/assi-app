@@ -14,6 +14,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.InputType;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
@@ -163,6 +164,7 @@ public class MainActivity extends Activity {
 
     private void showOffline() {
         if (setupView != null) return;   // на экране настройки сервера сторожа нет
+        Log.w("AssiHB", "showOffline");
         if (offlineView != null) {
             offlineView.setVisibility(View.VISIBLE);
             return;
@@ -213,7 +215,8 @@ public class MainActivity extends Activity {
         box.addView(retry, lp);
 
         offlineView = box;
-        root.addView(offlineView, new LinearLayout.LayoutParams(
+        // через addContentView: в root (LinearLayout) второй MATCH_PARENT-ребёнок уехал бы за экран
+        addContentView(offlineView, new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
     }
 
@@ -282,8 +285,8 @@ public class MainActivity extends Activity {
             @Override
             public void onPageFinished(WebView view, String url) {
                 if ("about:blank".equals(url)) return;
-                hideOffline();
-                // 1033 от Cloudflare приходит с кодом 200 — ловим по тексту страницы
+                // экран «сервер не отвечает» гасит только удачный пинг, а не загрузка страницы
+                // (иначе страница из кэша прячет его через секунду)
                 view.evaluateJavascript(
                         "((document.body&&document.body.innerText)||'').slice(0,600)", value -> {
                             if (value == null) return;
@@ -321,7 +324,7 @@ public class MainActivity extends Activity {
     private void startHeartbeat() {
         if (hbStarted) return;
         hbStarted = true;
-        hbHandler.postDelayed(hbTick, 5000);
+        hbHandler.postDelayed(hbTick, 1500);
     }
 
     private void pingOnce() {
@@ -346,7 +349,9 @@ public class MainActivity extends Activity {
                     }
                     ok = sb.indexOf("\"ok\"") >= 0;   // страница ошибки CF тоже 200 — проверяем тело
                 }
-            } catch (Exception ignored) {
+                Log.d("AssiHB", "ping " + base + " code=" + c.getResponseCode() + " ok=" + ok);
+            } catch (Exception e) {
+                Log.d("AssiHB", "ping fail: " + e);
             } finally {
                 if (c != null) c.disconnect();
             }
