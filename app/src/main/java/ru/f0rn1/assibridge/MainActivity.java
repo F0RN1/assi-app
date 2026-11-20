@@ -3,6 +3,7 @@ package ru.f0rn1.assibridge;
 import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.app.DownloadManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -11,6 +12,7 @@ import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.InputType;
@@ -27,6 +29,8 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.webkit.CookieManager;
+import android.webkit.URLUtil;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
@@ -50,7 +54,7 @@ public class MainActivity extends Activity {
     private static final String KEY_MAC = "wol_mac";
     private static final String KEY_BCAST = "wol_bcast";
     private static final String KEY_UIVER = "ui_version";
-    private static final String APP_VERSION = "1.2";
+    private static final String APP_VERSION = "1.3";
     private static final int REQ_FILE = 1001;
     private static final int REQ_MIC = 1002;
 
@@ -243,9 +247,31 @@ public class MainActivity extends Activity {
         s.setAllowFileAccess(false);
         s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         s.setUserAgentString(s.getUserAgentString().replace("; wv", ""));
-        WebView.setWebContentsDebuggingEnabled(true);
+        // отладка WebView — только в debug-сборке: chrome://inspect видит localStorage с токеном
+        boolean debuggable = (getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0;
+        WebView.setWebContentsDebuggingEnabled(debuggable);
 
         web.addJavascriptInterface(new Bridge(), "AssiNative");
+
+        // скачивание файлов с ПК: страница отдаёт /api/fs/download?...&t=<token>
+        web.setDownloadListener((url, ua, disposition, mime, len) -> {
+            try {
+                DownloadManager.Request req = new DownloadManager.Request(Uri.parse(url));
+                if (ua != null) req.addRequestHeader("User-Agent", ua);
+                String cookie = CookieManager.getInstance().getCookie(url);
+                if (cookie != null) req.addRequestHeader("Cookie", cookie);
+                String name = URLUtil.guessFileName(url, disposition, mime);
+                req.setTitle(name);
+                req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+                req.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, name);
+                DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+                if (dm == null) throw new IllegalStateException("нет DownloadManager");
+                dm.enqueue(req);
+                toast("Качаю: " + name);
+            } catch (Exception e) {
+                toast("Не смог скачать файл");
+            }
+        });
 
         web.setWebChromeClient(new WebChromeClient() {
             @Override
@@ -298,7 +324,7 @@ public class MainActivity extends Activity {
                             if (value == null) return;
                             String v = value.toLowerCase();
                             if (v.contains("error 1033") || v.contains("cloudflare tunnel error")
-                                    || v.contains("origin is unreachable") || v.contains("1033")) {
+                                    || v.contains("origin is unreachable")) {
                                 showOffline();
                             }
                         });
