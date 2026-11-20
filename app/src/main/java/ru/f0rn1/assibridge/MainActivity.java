@@ -530,5 +530,24 @@ public class MainActivity extends Activity {
         public String server() {
             return prefs().getString(KEY_SERVER, "");
         }
+
+        /** скачать файл с ПК в «Загрузки» телефона с правильным именем */
+        @JavascriptInterface
+        public void download(String url, String name) {
+            try {
+                String safe = (name == null || name.trim().isEmpty()) ? "file" : name.replaceAll("[\\\\/:*?\"<>|]", "_");
+                DownloadManager.Request req = new DownloadManager.Request(Uri.parse(url));
+                req.setTitle(safe);
+                req.setDescription("Assi Bridge");
+                req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+                req.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, safe);
+                DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+                if (dm == null) throw new IllegalStateException("нет DownloadManager");
+                dm.enqueue(req);
+                runOnUiThread(() -> toast("Качаю: " + safe));
+            } catch (Exception e) {
+                runOnUiThread(() -> toast("Не смог скачать файл"));
+            }
+        }
     }
 }
